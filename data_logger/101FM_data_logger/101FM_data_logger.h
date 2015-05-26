@@ -36,15 +36,17 @@ void setup();
 struct DataHeader {
 	uint16_t a;
 	uint16_t b;
+	uint32_t t;
 };
 void responseLog(char *data);
 void responseChannels();
-void initBeat();
+void beatSys();
+void beatNet();
 void heartBeat();
 //uint8_t EEXReadByte(uint16_t address); // convenience method for reading from dual I²C EEPROMS
 //uint8_t EEXWriteByte(uint32_t address, uint8_t val); // convenience method for writing to dual I²C EEPROMS
-void read_data_header(volatile struct DataHeader *d);
-void write_data_header(volatile struct DataHeader *b);
+void read_data_header();
+void write_data_header();
 void clear_logs(void); // to reset logs
 //void record_data(String str);
 uint8_t record_data_page_write_mode(unsigned char* data);
