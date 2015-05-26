@@ -67,6 +67,7 @@ const char txt_body_404[] PROGMEM= "page not found"; // TCP body for 404 status 
 const char txt_body_400[] PROGMEM= "bad request"; // TCP body for 400 status stored at Flash memory.
 const char txt_body_busy[] PROGMEM = "busy"; // TCP body to be used as the response when the system is busy doing other tasks.
 const char txt_body_time_updated[] PROGMEM = "time updated\n";
+const char txt_body_interrupted[] PROGMEM = "\ninterrupted!\n";
 
 // References to MCP23017 IOExpander chips. There are two of them configured with addresses 0x00 and 0x01 via their hardware address pins.
 Adafruit_MCP23017 mcp0, mcp1;
@@ -106,7 +107,6 @@ void setup() {
 	_delay_ms(1000);
 	beatNet();
 	beatSys();
-
 
 	Timer1.initialize(50000); // heartBeat() function to run every 50ms
 	Timer1.attachInterrupt(beatSys);
@@ -245,6 +245,7 @@ void loop() {
 		} else if (strncmp("GET /log ", data, 9) == 0) { // this is the real deal. Someone has requested to check the log.
 			responseLog(data);
 		} else if (strncmp("GET /dump ", data, 10) == 0) { // Well... this is going to be slow sometimes. Because reading the whole log is not a good idea.
+			Serial.println("/dump start");
 			ether.httpServerReplyAck();
 			memcpy_P(ether.tcpOffset(), txt_header_200, sizeof txt_header_200);
 			ether.httpServerReply_with_flags(sizeof txt_header_200 - 1,
@@ -270,14 +271,24 @@ void loop() {
 				 TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission only if this is the last packet.
 				 }*/
 				while (addra != addrb) {
-
-					ee_d.readBlock(addra - 0x0040, (uint8_t*) tmpbuff, 0x40);
-					addra -= 0x40;
-					memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
-					ether.httpServerReply_with_flags(sizeof tmpbuff - 1,
-							(addra == addrb) ?
-							TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V :
-												TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission only if this is the last packet.
+					if (awakenByInterrupt0 || awakenByInterrupt1) {
+						Serial.println("interrupt detected");
+						memcpy_P(ether.tcpOffset(), txt_body_interrupted, sizeof txt_body_interrupted);
+						ether.httpServerReply_with_flags(sizeof txt_body_interrupted - 1, TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V);
+						break;
+					} else {
+						Serial.println("reading 0x40 sized block from ee_d...");
+						ee_d.readBlock(addra - 0x0040, (uint8_t*) tmpbuff,
+								0x40);
+						Serial.println("read 0x40 sized block from ee_d");
+//					sprintf(tmpbuff, "2015-05-26 17:05:39 ???????????????????????????????????????? OFF\n");
+						addra -= 0x40;
+						memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
+						ether.httpServerReply_with_flags(sizeof tmpbuff - 1,
+								(addra == addrb) ?
+								TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V :
+													TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission only if this is the last packet.
+					}
 				}
 			} else {
 				sprintf(tmpbuff, "no data");
