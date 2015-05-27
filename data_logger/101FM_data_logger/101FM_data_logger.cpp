@@ -25,25 +25,21 @@
 #define TCP_FLAGS_FIN_V 1 //as declared in net.h
 #define TCP_FLAGS_ACK_V 0x10 //as declared in net.h
 
-#define EEPROM_DEV_HEADER 0x50
-#define EEPROM_DEV_DATA 0x51
+#define EEPROM_DEV_HEADER 0x50	// eeprom device where data header for the log is stored. This is where channel names are also stored
+// channel names are stored from 0x0000 to 0x0f80. Each character is stored at adjacent bytes in the available 128 bytes in a page.
+// data header is stored from 0xffff to 0x1000. This is also written into a full page (128 bytes) and the rest is kept blank.
+#define EEPROM_DEV_DATA 0x51	// eeprom with this I²C address stores log data. Each log entry has 64 bytes of storage. Each page will contain two log entries.
 
-// Interrupts from the MCPs will be handled by these pins.
-//byte INTPIN0 = 2, INTPIN1 = 3, HBLED = 4, HBLED2 = 5, NETLED = 6;
+#define INTPIN0 (1 << PD2) // interrupt pin connected to MCP23017 at 0x50
+#define INTPIN1 (1 << PD3) // interrupt pin connected to MCP23017 at 0x51
 
-#define INTPIN0 (1 << PD2)
-#define INTPIN1 (1 << PD3)
-#define SYSLED (1 << PD4)
-#define SYSLEDEXT (1 << PD5)
-#define NETLED (1 << PD6)
+volatile uint8_t portdhistory = 0xff; // This is where the history of the interrupt pins is kept so that we can detect a change
 
-volatile uint32_t heartBeatStatus = 1; // counter for heartbeat LED
+#define SYSLED (1 << PD4) // This LED is for showing the device health. It should blink ~50ms in each ~1600ms on normal operation. It will also show activity on EEPROMs when used.
+#define SYSLEDEXT (1 << PD5) // This LED functions along with SYSLED without any difference and is intended to be used outside the unit.
+#define NETLED (1 << PD6) // This one is for indicating network activity.
 
-// These are the interrupt vectors for above pins. These correspond exactly to above Arduino pins and cannot be changed.
-//byte int0 = 0, int1 = 1;
-
-#define INT0 0
-#define INT1 1
+volatile uint32_t beatsysint = 1; // counter for heartbeat LED
 
 I2C_eeprom ee_h(EEPROM_DEV_HEADER);
 I2C_eeprom ee_d(EEPROM_DEV_DATA);
@@ -51,8 +47,6 @@ I2C_eeprom ee_d(EEPROM_DEV_DATA);
 static byte myip[] = { 192, 168, 2, 2 };
 static byte gwip[] = { 192, 168, 2, 1 };
 static byte mymac[] = { 0x74, 0x69, 0x69, 0xD1, 0x2F, 0x38 };
-
-volatile uint8_t ee_busy = 0;
 
 byte Ethernet::buffer[TCP_BUFF_MAX]; // tcp ip send and receive buffer
 
@@ -91,29 +85,24 @@ uint8_t dh_block[9];
  */
 void setup() {
 
-//	pinMode(HBLED, OUTPUT); // set up white heartbeat LED
-//	pinMode(HBLED2, OUTPUT); // set up white heartbeat LED2
-//	pinMode(NETLED, OUTPUT); // set up white activity LED
-//	pinMode(INTPIN0, INPUT_PULLUP); // interrupt pin should be set up as INPUT
-//	pinMode(INTPIN1, INPUT_PULLUP); // interrupt pin should be set up as INPUT
-	// above code has been made smaller and faster using lines below
-
 	DDRD |= SYSLED | SYSLEDEXT | NETLED; // configure  SYSLED, SYSLEDEXT and NETLED as outputs
 	DDRD &= ~INTPIN0 & ~INTPIN1; // configure INTPIN0 and INTPIN1 as inputs
 	PORTD |= INTPIN0 | INTPIN1; // turn on the pull ups on INTPIN0 and INTPIN1
 
-	beatNet();
-	beatSys();
-	_delay_ms(1000);
-	beatNet();
-	beatSys();
 
-	Timer1.initialize(50000); // heartBeat() function to run every 50ms
-	Timer1.attachInterrupt(beatSys);
 
-	Serial.begin(9600); // Setup TTL baudrate
+	toggleNET();	// toggles NETLED (will turn on)
+	toggleSYS();	// toggles SYSLED and SYSLEDEXT (will turn on)
+	_delay_ms(1000);	// enough time so that we can test if LEDs are fine
+	toggleNET();	// toggles NETLED (will turn off)
+	toggleSYS();	// toggles SYSLED and SYSLEDEXT (will turn off)
 
-	Serial.println("Setting up"); // for debugging through TTL
+	Timer1.initialize(50000);	// timer1 runs every 50ms - value is in μS
+	Timer1.attachInterrupt(toggleSYS);// attaches the timer1 to beatSys function. This causes the beatSys function to be called every 50ms
+
+	Serial.begin(9600);	// Setup serial line baudrate (3V3 TTL)
+
+	Serial.println("Setting up");	// for debugging
 
 	// START DATA HEADER SEARCH
 	// We have implemented simple wear leveling on write_data_header() so that whenever a new log is written to DATA eeprom
@@ -124,70 +113,67 @@ void setup() {
 	uint32_t val;
 	uint16_t addr = 0xff80;
 	do {
-		ee_h.readBlock(addr, (uint8_t*) dh_block, 8);
+		ee_h.readBlock(addr, (uint8_t*) dh_block, 8);// read first 8 bytes in which we store header data
 		val = (uint32_t) dh_block[0];
 		val |= (uint32_t) ((uint32_t) dh_block[1] << 8);
 		val |= (uint32_t) ((uint32_t) dh_block[2] << 16);
-		val |= (uint32_t) ((uint32_t) dh_block[3] << 24);
-		if (val <= unix_tm_inv) {
+		val |= (uint32_t) ((uint32_t) dh_block[3] << 24);// construct inv(unixtime) value
+		if (val <= unix_tm_inv) {// compare it to find min(inv(unixtime)) value
 			unix_tm_inv = val;
 			dh_addr = addr;
 		}
-		addr -= 0x80;
-	} while (addr > 0x0f80);
+		addr -= 0x80;	// go to next available page
+	} while (addr > 0x0f80);	// check within these bounds
 
 	// END DATA HEADER SEARCH
 
-	read_data_header(); // load the data header to the RAM
+	read_data_header();	// load the data header to the RAM
 
 	Serial.print("HDER: 0x");
 	Serial.println(dh_addr, 16);
 	Serial.print("DH_T: ");
 	Serial.println(dh->t);
 
-	_delay_ms(20);
+	Timer1.detachInterrupt();	// detach timer1 from previous function
+	PORTD &= ~SYSLED & ~SYSLEDEXT; // turn off SYSLED and SYSLEDEXT as they may be ON by now
+	Timer1.initialize(50000); 	// initialize timer1 to 50ms
+	Timer1.attachInterrupt(toggleNET);// attach timer1 to toggle NETLED since below we are going to initialize network adapter
 
-	Timer1.detachInterrupt();
-	Timer1.initialize(50000); // heartBeat() function to run every 50ms
-	Timer1.attachInterrupt(beatNet);
 	if (!ether.begin(sizeof Ethernet::buffer, mymac, 9)) { // We have connected the chip select on digital 9. This will result in zero upon failure of network adaptor based on EN28J60
 		Serial.println("Ethernet failed!"); // send error through terminal and keep beating the NETLED
 	} else {
 		ether.staticSetup(myip, gwip);
 
-		Timer1.detachInterrupt();
-		Timer1.initialize(50000); // heartBeat() function to run every 50ms
-		Timer1.attachInterrupt(beatSys);
+		Timer1.detachInterrupt();// We are done setting up the network. This stops blinking NETLED.
+		PORTD &= ~NETLED;	// turns off NETLED
+		Timer1.initialize(50000);
+		Timer1.attachInterrupt(toggleSYS);
 
 		Serial.println("Ethernet started");
 
-		mcp0.begin(0);      // use default address 0
-		mcp1.begin(1);
+		mcp0.begin(0);// initializes mcp0 object to refer to the MCP23017 at address 0x20. This chip handles BANK0
+		mcp1.begin(1);	// 0x21. This handles BANK1
 
 		// We mirror INTA and INTB, so that only one line is required between MCP23017 and AVR for int reporting
 		// The INTA/B will not be Floating
 
-		for (int a = 0; a < 16; a++) { // To address all 16 pins (GPIOA + GPIOB)
+		for (int a = 0; a < 16; a++) {// To address all 16 pins (GPIOA + GPIOB)
 			mcp0.pinMode(a, INPUT);
-			mcp0.pullUp(a, HIGH);
+			mcp0.pullUp(a, HIGH);// turns on internal pullups at 100kΩ. We have to add external pullups so that we do not pickup transient voltages generated by RF plus some caps at ~0.1μF
 			mcp0.setupInterruptPin(a, CHANGE); // We instruct MCP23017 to trigger interrupts on pin CHANGE
 			mcp1.pinMode(a, INPUT);
 			mcp1.pullUp(a, HIGH);
 			mcp1.setupInterruptPin(a, CHANGE); // We instruct MCP23017 to trigger interrupts on pin CHANGE
 		}
 
-		mcp0.readGPIOAB(); // Read IO lines from Bus 0 to clean any previous interrupts on MCP23017
-		mcp1.readGPIOAB(); // Read IO lines from Bus 1 to clean any previous interrupts on MCP23017
-
-		_delay_ms(10);
+		mcp0.readGPIOAB(); // Read IO lines from Bus 0 to clean any interrupts on MCP23017 for BANK0
+		mcp1.readGPIOAB(); // Read IO lines from Bus 1 to clean any interrupts on MCP23017 for BANK1
 
 		// INTs will be signaled with a LOW
 		mcp0.setupInterrupts(true, false, LOW);
 		mcp1.setupInterrupts(true, false, LOW);
 
-		_delay_ms(200);
-
-		DS3231_get(&t); // Read the time from DS3231 into struct t.
+		DS3231_get(&t); // Read the time from DS3231 into struct t. This is to test if the RTC is fine.
 
 		char buf[128];
 		sprintf(buf, "Testing RTC : %04d-%02d-%02d %02d:%02d:%02d", t.year,
@@ -195,13 +181,20 @@ void setup() {
 
 		Serial.println(buf);
 
-		attachInterrupt(INT0, intCallBack0, LOW);
-		attachInterrupt(INT1, intCallBack1, LOW);
+		PCICR |= (1 << PCIE2); // enable PCIE2 in Pin Change Interrupt Control Register (PCICR).
+		PCMSK2 |= (1 << PCINT18) | (1 << PCINT19); // PCINT18 and PCINT19 are related to Pin Change Mask Regsiter 2 (PCMSK2). So lets enable those two.
 
 		Timer1.detachInterrupt();
-		Timer1.initialize(150000); // heartBeat() function to run every 150ms
-		Timer1.attachInterrupt(heartBeat);
+		Timer1.initialize(150000);
+		Timer1.attachInterrupt(beatSYS);
 
+		sei();
+
+		if ((0xffffffff - unix_tm_inv) > t.unixtime) { // check if we are getting an invalid time from RTC. A malfunctioning EEPROM also can be a reason
+			Timer1.detachInterrupt();
+			Timer1.initialize(80000);
+			Timer1.attachInterrupt(toggleSYS);
+		}
 	}
 }
 
@@ -217,9 +210,7 @@ void loop() {
 	// This also helps us get rid of bouncing issues on switches.
 	// Finally re-attach interrupt to corresponding pin and function.
 	if (awakenByInterrupt0) {
-		detachInterrupt(INT0);
 		handleInterrupt(&mcp0, &awakenByInterrupt0);
-		attachInterrupt(INT0, intCallBack0, LOW);
 	}
 
 	// Check each of the interrupt flags and act accordingly.
@@ -227,9 +218,7 @@ void loop() {
 	// This also helps us get rid of bouncing issues on switches.
 	// Finally re-attach interrupt to corresponding pin and function.
 	if (awakenByInterrupt1) {
-		detachInterrupt(INT1);
 		handleInterrupt(&mcp1, &awakenByInterrupt1);
-		attachInterrupt(INT1, intCallBack1, LOW);
 	}
 
 	// recieve data from Ethernet card
@@ -245,7 +234,6 @@ void loop() {
 		} else if (strncmp("GET /log ", data, 9) == 0) { // this is the real deal. Someone has requested to check the log.
 			responseLog(data);
 		} else if (strncmp("GET /dump ", data, 10) == 0) { // Well... this is going to be slow sometimes. Because reading the whole log is not a good idea.
-			Serial.println("/dump start");
 			ether.httpServerReplyAck();
 			memcpy_P(ether.tcpOffset(), txt_header_200, sizeof txt_header_200);
 			ether.httpServerReply_with_flags(sizeof txt_header_200 - 1,
@@ -256,39 +244,14 @@ void loop() {
 			uint16_t addrb = dh->b;
 			tmpbuff[64] = 0x0a; // new line character at end - 1. end should be NULL (\0)
 			if (addra != addrb) {
-				/*while (addra != addrb) {
-				 for (uint16_t j = 0x00; j < 0x20; j++) {
-				 tmpbuff[j] = EEXReadByte(
-				 ((uint32_t) (addra - 0x0020 + j)) | 0x10000);
-
-				 }
-				 tmpbuff[32] = 0x0a;
-				 addra -= 0x20;
-				 memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
-				 ether.httpServerReply_with_flags(sizeof tmpbuff - 1,
-				 (addra == addrb) ?
-				 TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V :
-				 TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission only if this is the last packet.
-				 }*/
 				while (addra != addrb) {
-					if (awakenByInterrupt0 || awakenByInterrupt1) {
-						Serial.println("interrupt detected");
-						memcpy_P(ether.tcpOffset(), txt_body_interrupted, sizeof txt_body_interrupted);
-						ether.httpServerReply_with_flags(sizeof txt_body_interrupted - 1, TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V);
-						break;
-					} else {
-						Serial.println("reading 0x40 sized block from ee_d...");
-						ee_d.readBlock(addra - 0x0040, (uint8_t*) tmpbuff,
-								0x40);
-						Serial.println("read 0x40 sized block from ee_d");
-//					sprintf(tmpbuff, "2015-05-26 17:05:39 ???????????????????????????????????????? OFF\n");
-						addra -= 0x40;
-						memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
-						ether.httpServerReply_with_flags(sizeof tmpbuff - 1,
-								(addra == addrb) ?
-								TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V :
-													TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission only if this is the last packet.
-					}
+					ee_d.readBlock(addra - 0x0040, (uint8_t*) tmpbuff, 0x40);
+					addra -= 0x40;
+					memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
+					ether.httpServerReply_with_flags(sizeof tmpbuff - 1,
+							(addra == addrb) ?
+							TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V :
+												TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission only if this is the last packet.
 				}
 			} else {
 				sprintf(tmpbuff, "no data");
@@ -313,8 +276,9 @@ void loop() {
 			memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
 			ether.httpServerReply_with_flags(sizeof tmpbuff - 1,
 			TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V);
-		} else if (strncmp("GET /clr ", data, 9) == 0) {
-			clear_logs();
+		} else if (strncmp("GET /clr ", data, 9) == 0) { // clear data logs
+			dh->b = dh->a; // To clear the logs. This doesn't clear the actual logs at all, rather acts like a deletion of a file from a hard disk  where only table header (in the first EEPROM chip) is modified.
+			write_data_header();
 			ether.httpServerReplyAck();
 			memcpy_P(ether.tcpOffset(), txt_header_200, sizeof txt_header_200);
 			ether.httpServerReply_with_flags(sizeof txt_header_200 - 1,
@@ -325,7 +289,7 @@ void loop() {
 			memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
 			ether.httpServerReply_with_flags(sizeof tmpbuff - 1,
 			TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V); // Send final packet with FIN which ends the TCP transmission.
-		} else if (strncmp("GET /time?", data, 10) == 0) {
+		} else if (strncmp("GET /time?", data, 10) == 0) { // to set the time
 			char year[5];
 			memcpy(year, &data[10], 4);
 			t.year = atol(year);
@@ -368,7 +332,7 @@ void loop() {
 			memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
 			ether.httpServerReply_with_flags(sizeof tmpbuff - 1,
 			TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V); // Send final packet with FIN which ends the TCP transmission.
-		} else if (strncmp("GET /time ", data, 10) == 0) {
+		} else if (strncmp("GET /time ", data, 10) == 0) { // to get the time
 			DS3231_get(&t); // receive time from RTC
 			ether.httpServerReplyAck();
 			memcpy_P(ether.tcpOffset(), txt_header_200, sizeof txt_header_200);
@@ -381,7 +345,7 @@ void loop() {
 			memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
 			ether.httpServerReply_with_flags(sizeof tmpbuff - 1,
 			TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V); // Send final packet with FIN which ends the TCP transmission.
-		} else if (strncmp("GET /cnl?b", data, 10) == 0) {
+		} else if (strncmp("GET /cnl?b", data, 10) == 0) { // to set a name for a specified channel
 			String s = data;
 			uint8_t end = s.indexOf(" HTTP/1.");
 
@@ -424,7 +388,7 @@ void loop() {
 							TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V :
 										TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission.
 				}
-			} else {
+			} else { // invalid / incomplete format on the request for setting channel name
 				ether.httpServerReplyAck(); // send ack to the request
 				memcpy_P(ether.tcpOffset(), txt_header_400,
 						sizeof txt_header_400);
@@ -435,7 +399,7 @@ void loop() {
 				TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V); // Send final packet with FIN which ends the TCP transmission.
 			}
 
-		} else if (strncmp("GET /cnl?reset ", data, 15) == 0) {
+		} else if (strncmp("GET /cnl?reset ", data, 15) == 0) { // resets channel names to defaults
 			char writebuff[41];
 
 			for (uint8_t x = 0; x < 0x20; x++) {
@@ -445,7 +409,7 @@ void loop() {
 			}
 
 			responseChannels();
-		} else if (strncmp("GET /cnl ", data, 9) == 0) {
+		} else if (strncmp("GET /cnl ", data, 9) == 0) { // response names of all channels
 			responseChannels();
 		} else { // Page not found. Yes 404.
 			ether.httpServerReplyAck(); // send ack to the request
@@ -456,7 +420,6 @@ void loop() {
 			ether.httpServerReply_with_flags(sizeof txt_body_404 - 1,
 			TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V); // Send final packet with FIN which ends the TCP transmission.
 		}
-//		digitalWrite(NETLED, LOW);
 		PORTD &= ~NETLED;
 	}
 }
@@ -511,62 +474,38 @@ void responseChannels() {
 							TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission.
 	}
 }
-void beatSys() {
-//	digitalWrite(HBLED, !digitalRead(HBLED));
-//	digitalWrite(HBLED2, !digitalRead(HBLED2));
+
+/**
+ * Toggles SYSLED and SYSLEDEXT
+ */
+void toggleSYS() {
 	PORTD ^= SYSLED | SYSLEDEXT;
 }
 
 /**
- * Blink both NET and ACT leds in an error.
+ * Toggles NETLED.
  */
-void beatNet() {
-//	digitalWrite(HBLED, !digitalRead(HBLED));
-//	digitalWrite(HBLED2, !digitalRead(HBLED2));
+void toggleNET() {
 	PORTD ^= NETLED;
 }
 
-void heartBeat() {
-	if (!heartBeatStatus) {
-//		digitalWrite(HBLED, HIGH);
-//		digitalWrite(HBLED2, HIGH);
+/**
+ * When system functions normally the SYSLED fires up ~50ms every ~1600ms
+ */
+void beatSYS() {
+	if (!beatsysint) {
 		PORTD |= SYSLED | SYSLEDEXT;
-		heartBeatStatus = 1;
-	} else if (heartBeatStatus == 0x2) {
-//		digitalWrite(HBLED, LOW);
-//		digitalWrite(HBLED2, LOW);
+		beatsysint = 1;
+	} else if (beatsysint == 0x2) {
 		PORTD &= ~SYSLED & ~SYSLEDEXT;
 	}
-	heartBeatStatus <<= 1;
+	beatsysint <<= 1;
 }
 
-/*
- * Convenience function to read a byte from specified address at data eeprom (ee_d, 24LC512). Any byte that is out of range (in our app) is
- * considered a "space".
- */
-//uint8_t EEXReadByte(uint16_t address) {
-//	uint8_t r;
-//	r = ee_d.readByte(address);
-//	r = r < 0x20 || r > 0x7e ? 0x20 : r;
-//	return r;
-//}
 /**
  * To read data header from first EEPROM
  */
 void read_data_header() {
-//	d->a = (uint16_t) ee_h.readByte(0x8000);
-//	d->a |= (uint16_t) (ee_h.readByte(0x8001) << 8);
-//	d->b = (uint16_t) ee_h.readByte(0x8002);
-//	d->b |= (uint16_t) (ee_h.readByte(0x8003) << 8);
-
-	// above code is optimized below. reads the continuous 4 bytes all sequentially so that it takes less time
-//	uint8_t block[5];
-//	ee_h.readBlock(0x8000, (uint8_t*) block, 4);
-//	d->a = (uint16_t) block[0];
-//	d->a |= (uint16_t) (block[1] << 8);
-//	d->b = (uint16_t) block[2];
-//	d->b |= (uint16_t) (block[3] << 8);
-
 	ee_h.readBlock(dh_addr, (uint8_t*) dh_block, 8);
 	dh->t = (uint32_t) dh_block[0];
 	dh->t |= (uint32_t) ((uint32_t) dh_block[1] << 8);
@@ -582,18 +521,6 @@ void read_data_header() {
  * To write data header into first EEPROM
  */
 void write_data_header() {
-//	ee_h.writeByte(0x8000, (uint8_t) (b->a & 0xff));
-//	ee_h.writeByte(0x8001, (uint8_t) ((b->a & 0xff00) >> 8));
-//	ee_h.writeByte(0x8002, (uint8_t) (b->b & 0xff));
-//	ee_h.writeByte(0x8003, (uint8_t) ((b->b & 0xff00) >> 8));
-	// above code is optimized below. writes the continuous 4 bytes all sequentially so that it takes less time
-//	uint8_t block[5];
-//	block[0] = (uint8_t) (b->a & 0xff);
-//	block[1] = (uint8_t) ((b->a & 0xff00) >> 8);
-//	block[2] = (uint8_t) (b->b & 0xff);
-//	block[3] = (uint8_t) ((b->b & 0xff00) >> 8);
-//	ee_h.writeBlock(0x8000, block, 4);
-
 	DS3231_get(&t);
 	dh->t = 0xffffffff - t.unixtime;
 	dh_block[4] = (uint8_t) (dh->a & 0xff);
@@ -608,45 +535,10 @@ void write_data_header() {
 	if (dh_addr == 0x0f80) {
 		dh_addr = 0xff80;
 	}
-	ee_h.writeBlock(dh_addr, (uint8_t*) dh_block, 8);
+	if (ee_h.writeBlock(dh_addr, (uint8_t*) dh_block, 8)) {
+		Serial.println("error writing data to ee_h!");
+	}
 }
-
-/**
- * To clear the logs. This doesn't clear the actual logs at all, rather acts like a deletion of a file from a hard disk
- * where only table header (in the first EEPROM chip) is set to 0x00000, 0x00000.
- */
-void clear_logs(void) {
-	if (ee_busy)
-		return;
-	ee_busy = 1;
-	dh->b = dh->a;
-	write_data_header();
-	ee_busy = 0;
-}
-
-/**
- * We have designed our logger to record 32 bytes for each incident. As of now we are calling EEXWriteByte 32 times
- * in order to log one incident where each byte written will take ~5ms. This time can be reduced by using page write
- * function of EEPROM. This is one of the places we can optimize.
-
- void record_data(char *str) {
- if (ee_busy)
- return;
- ee_busy = 1;
- read_data_header(dh);
-
- for (uint32_t j = 0; j < 0x20; j++) {
- EEXWriteByte(((uint32_t) (dh->a + j)) | 0x10000, str[j]);
- }
-
- dh->a += 0x0020;
- if (dh->a == dh->b) {
- dh->b += 0x00020;
- }
- write_data_header(dh);
- ee_busy = 0;
- }
- */
 
 /**
  * Improved page write mode.
@@ -658,68 +550,23 @@ void clear_logs(void) {
  */
 
 uint8_t record_data_page_write_mode(char* data) {
-
-	if (ee_busy)
-		return 0;
-	ee_busy = 1;
+	PORTD |= SYSLED | SYSLEDEXT;	// turn on SYSLED to show eeprom usage
 	read_data_header();
-
-	/*Wire.beginTransmission(EEPROM_DEV_DATA); // we write to the second 24LC512.
-	 Wire.write((int) ((dh->a) >> 8));   // MSB
-	 Wire.write((int) ((dh->a) & 0xFF)); // LSB
-
-	 for (uint32_t j = 0; j < 0x10; j++) {
-	 Wire.write((byte) data[j]);
-	 }
-
-	 Wire.endTransmission();
-
-	 delay(5);
-
-	 Wire.beginTransmission(EEPROM_DEV_DATA); // we write to the second 24LC512.
-	 Wire.write((int) ((dh->a + 0x10) >> 8));   // MSB
-	 Wire.write((int) ((dh->a + 0x10) & 0xFF)); // LSB
-
-	 for (uint32_t j = 0x10; j < 0x20; j++) {
-	 Wire.write((byte) data[j]);
-	 }
-
-	 Wire.endTransmission();
-	 delay(5);
-	 */
-
-	ee_d.writeBlock(dh->a, (uint8_t*) data, 0x40);
-
-	dh->a += 0x0040;
-	if (dh->a == dh->b) {
-		dh->b += 0x00040;
+	if (ee_d.writeBlock(dh->a, (uint8_t*) data, 0x40)) {
+		Serial.println("error writing data to ee_d!");
+	} else {
+		dh->a += 0x0040;
+		if (dh->a == dh->b) {
+			dh->b += 0x00040;
+		}
+		write_data_header();
 	}
-	write_data_header();
-	ee_busy = 0;
-
+	PORTD &= ~SYSLED & ~SYSLEDEXT;	// turn off SYSLED
 	return 1;
 }
 
-// The int handler will just signal that the int has happen
-// we will do the work from the main loop.
 /**
- * This is the function call which gets automatically triggered when MCP23017 for Bank 1 triggers an interrupt on ATMega328p's PIN4
- */
-void intCallBack0() {
-	awakenByInterrupt0 = true;
-}
-
-// The int handler will just signal that the int has happen
-// we will do the work from the main loop.
-/**
- * This is the function call which gets automatically triggered when MCP23017 for Bank 1 triggers an interrupt on ATMega328p's PIN4
- */
-void intCallBack1() {
-	awakenByInterrupt1 = true;
-}
-
-/**
- * Handle the registered interrupts. Below is the generic procedure. The implementation below is an extension upon below basic steps.
+ * Handle registered interrupts. Below is a list of steps to follow. The implementation below is an extension upon these basic steps.
  * Look for the comments in code.
  * 1. Check which pin has been changed.
  * 2. Check the value of the pin.
@@ -777,18 +624,30 @@ void handleInterrupt(Adafruit_MCP23017 *mcp,
 
 		mcp->digitalRead(pin); // clear the interrupt condition on MCP. To speed up logging you can move this right after the line that reads val = mcp->getLastInterruptPinValue();
 	}
-
-// and clean queued INT signal
-	cleanInterrupts(awakenByInterrupt);
+	*awakenByInterrupt = false;
 }
 
-// handy for interrupts triggered by buttons
-// normally signal a few due to bouncing issues
-/**
- * This clears the interrupt register at μc and prepares itself for another interrupt.
- */
-void cleanInterrupts(volatile boolean *awakenByInterrupt) {
-	EIFR = 0x01;
-	*awakenByInterrupt = false;
+ISR(PCINT2_vect) {
+	uint8_t changedbits;
+	changedbits = PIND ^ portdhistory;
+	portdhistory = PIND;
+	if (changedbits & (1 << PIND2)) {
+		if ((PIND & (1 << PIND2)) == (1 << PIND2)) {
+			// rising edge
+		} else {
+			// falling edge
+			awakenByInterrupt0 = true;
+		}
+	}
+
+	if (changedbits & (1 << PIND3)) {
+		if ((PIND & (1 << PIND3)) == (1 << PIND3)) {
+			// rising edge
+		} else {
+			// falling edge]
+			awakenByInterrupt1 = true;
+		}
+	}
+
 }
 
