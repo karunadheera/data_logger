@@ -50,8 +50,7 @@ const char txt_body_interrupted[] PROGMEM = "\ninterrupted!\n";
 Adafruit_MCP23017 mcp0, mcp1;
 
 volatile uint16_t mcp0_bits = 0b1111111111111111; // all the pins are pulled high
-volatile uint16_t mcp1_bits = 0b1111111111111111; // ,,
-
+volatile uint16_t mcp1_bits = 0b1111111111111111; // ''
 //volatile boolean awakenByInterrupt0 = false, awakenByInterrupt1 = false; // Flags those get set when there is an interrupt on corresponding MCP23017 chips.
 
 char buf_prog[41]; // Temporary buffer to be used to store words read from Flash (PROGMEM).
