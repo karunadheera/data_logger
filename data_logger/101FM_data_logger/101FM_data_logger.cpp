@@ -84,7 +84,7 @@ void setup() {
     Timer1.initialize(50000);	// timer1 runs every 50ms - value is in μS
     Timer1.attachInterrupt(toggleSYS);	// attaches the timer1 to beatSys function. This causes the beatSys function to be called every 50ms
 
-    Serial.begin(9600);	// Setup serial line baudrate (3V3 TTL)
+    Serial.begin(230400);	// Setup serial line baudrate (3V3 TTL)
 
     Serial.println("Setting up");	// for debugging
 
@@ -178,29 +178,6 @@ void setup() {
             Timer1.initialize(80000);
             Timer1.attachInterrupt(toggleSYS);
         }
-    }
-}
-
-void detect_pin_changes(Adafruit_MCP23017 *mcp) {
-    // detect changes in pins of MCP23017
-    uint16_t changedBits = mcp->getAddr() ? mcp1_bits : mcp0_bits ^ mcp->readGPIOAB();
-    if (changedBits) {
-        Serial.println("a pin-change detected. now checking which pin it is");
-        for (uint8_t pin = 0; pin < 16; pin++) {
-            uint8_t bit = (changedBits >> pin) & 0b1;
-            if (bit) {
-                DS3231_get(&t); // receive time from RTC
-                uint8_t val = mcp->digitalRead(pin);
-                uint16_t addr = (0x0080 * ((uint16_t) pin)) + (mcp->getAddr() ? 0x0800 : 0);
-                ee_h.readBlock(addr, (uint8_t*) buf_prog, 40);
-                sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val ? "ON" : "OFF");
-                Serial.println(buf);
-                record_data_page_write_mode(buf); // Write to eeprom
-            }
-        }
-        mcp->getAddr() ? mcp1_bits : mcp0_bits = mcp->readGPIOAB();
-    } else {
-        Serial.println("No pin change detected");
     }
 }
 
@@ -520,4 +497,34 @@ uint8_t record_data_page_write_mode(char* data) {
     PORTD &= ~EEPLED;	// turn off EEPLED
     return 1;
 }
+
+
+/**
+ * Let's try to detect pin changes by comparing the current GPIOAB values with the ones in the history using XOR
+ * When there is a pin change those bits should appear as 1
+ */
+void detect_pin_changes(Adafruit_MCP23017 *mcp) {
+    // detect changes in pins of MCP23017
+    uint16_t changedBits = (mcp->getAddr() ? mcp1_bits : mcp0_bits) ^ mcp->readGPIOAB();
+    if (changedBits) {
+        Serial.print("a pin-change detected at MCP23017 at addr:");
+        Serial.println(mcp->getAddr(), DEC);
+        Serial.print("changed bits are:");
+        Serial.println(changedBits, BIN);
+        for (uint8_t pin = 0; pin < 16; pin++) { // go thorugh all 16 pins
+            uint8_t bit = (changedBits >> pin) & 0b1; // grab the required bit out of the GPIOAB values
+            if (bit) { // check if this bit is not zero
+                DS3231_get(&t); // receive time from RTC
+                uint8_t val = mcp->digitalRead(pin);
+                uint16_t addr = (0x0080 * ((uint16_t) pin)) + (mcp->getAddr() ? 0x0800 : 0);
+                ee_h.readBlock(addr, (uint8_t*) buf_prog, 40);
+                sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val ? "ON" : "OFF");
+                Serial.println(buf);
+                record_data_page_write_mode(buf); // Write to eeprom
+            }
+        }
+        (mcp->getAddr() ? mcp1_bits : mcp0_bits) = mcp->readGPIOAB();
+    }
+}
+
 

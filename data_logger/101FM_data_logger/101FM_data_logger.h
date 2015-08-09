@@ -77,12 +77,7 @@ void read_data_header();
 void write_data_header();
 //void record_data(String str);
 uint8_t record_data_page_write_mode(char* data);
-//void intCallBack0();
-//void intCallBack1();
-
-//void handleInterrupt(Adafruit_MCP23017 *mcp,
-//		volatile boolean *awakenByInterrupt);
-//void cleanInterrupts(volatile boolean  *awakenByInterrupt);
+void detect_pin_changes(Adafruit_MCP23017 *mcp);
 
 //Do not add code below this line
 #endif /* _101FM_data_logger_H_ */
