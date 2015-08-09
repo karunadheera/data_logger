@@ -230,67 +230,67 @@ uint8_t Adafruit_MCP23017::digitalRead(uint8_t pin) {
  * If you are connecting the INTA/B pin to arduino 2/3, you should configure the interupt handling as FALLING with
  * the default configuration.
  */
-void Adafruit_MCP23017::setupInterrupts(uint8_t mirroring, uint8_t openDrain, uint8_t polarity){
-	// configure the port A
-	uint8_t ioconfValue=readRegister(MCP23017_IOCONA);
-	bitWrite(ioconfValue,6,mirroring);
-	bitWrite(ioconfValue,2,openDrain);
-	bitWrite(ioconfValue,1,polarity);
-	writeRegister(MCP23017_IOCONA,ioconfValue);
+//void Adafruit_MCP23017::setupInterrupts(uint8_t mirroring, uint8_t openDrain, uint8_t polarity){
+//	// configure the port A
+//	uint8_t ioconfValue=readRegister(MCP23017_IOCONA);
+//	bitWrite(ioconfValue,6,mirroring);
+//	bitWrite(ioconfValue,2,openDrain);
+//	bitWrite(ioconfValue,1,polarity);
+//	writeRegister(MCP23017_IOCONA,ioconfValue);
+//
+//	// Configure the port B
+//	ioconfValue=readRegister(MCP23017_IOCONB);
+//	bitWrite(ioconfValue,6,mirroring);
+//	bitWrite(ioconfValue,2,openDrain);
+//	bitWrite(ioconfValue,1,polarity);
+//	writeRegister(MCP23017_IOCONB,ioconfValue);
+//}
+//
+///**
+// * Set's up a pin for interrupt. uses arduino MODEs: CHANGE, FALLING, RISING.
+// *
+// * Note that the interrupt condition finishes when you read the information about the port / value
+// * that caused the interrupt or you read the port itself. Check the datasheet can be confusing.
+// *
+// */
+//void Adafruit_MCP23017::setupInterruptPin(uint8_t pin, uint8_t mode) {
+//
+//	// set the pin interrupt control (0 means change, 1 means compare against given value);
+//	updateRegisterBit(pin,(mode!=CHANGE),MCP23017_INTCONA,MCP23017_INTCONB);
+//	// if the mode is not CHANGE, we need to set up a default value, different value triggers interrupt
+//
+//	// In a RISING interrupt the default value is 0, interrupt is triggered when the pin goes to 1.
+//	// In a FALLING interrupt the default value is 1, interrupt is triggered when pin goes to 0.
+//	updateRegisterBit(pin,(mode==FALLING),MCP23017_DEFVALA,MCP23017_DEFVALB);
+//
+//	// enable the pin for interrupt
+//	updateRegisterBit(pin,HIGH,MCP23017_GPINTENA,MCP23017_GPINTENB);
+//
+//}
 
-	// Configure the port B
-	ioconfValue=readRegister(MCP23017_IOCONB);
-	bitWrite(ioconfValue,6,mirroring);
-	bitWrite(ioconfValue,2,openDrain);
-	bitWrite(ioconfValue,1,polarity);
-	writeRegister(MCP23017_IOCONB,ioconfValue);
-}
-
-/**
- * Set's up a pin for interrupt. uses arduino MODEs: CHANGE, FALLING, RISING.
- *
- * Note that the interrupt condition finishes when you read the information about the port / value
- * that caused the interrupt or you read the port itself. Check the datasheet can be confusing.
- *
- */
-void Adafruit_MCP23017::setupInterruptPin(uint8_t pin, uint8_t mode) {
-
-	// set the pin interrupt control (0 means change, 1 means compare against given value);
-	updateRegisterBit(pin,(mode!=CHANGE),MCP23017_INTCONA,MCP23017_INTCONB);
-	// if the mode is not CHANGE, we need to set up a default value, different value triggers interrupt
-
-	// In a RISING interrupt the default value is 0, interrupt is triggered when the pin goes to 1.
-	// In a FALLING interrupt the default value is 1, interrupt is triggered when pin goes to 0.
-	updateRegisterBit(pin,(mode==FALLING),MCP23017_DEFVALA,MCP23017_DEFVALB);
-
-	// enable the pin for interrupt
-	updateRegisterBit(pin,HIGH,MCP23017_GPINTENA,MCP23017_GPINTENB);
-
-}
-
-uint8_t Adafruit_MCP23017::getLastInterruptPin(){
-	uint8_t intf;
-
-	// try port A
-	intf=readRegister(MCP23017_INTFA);
-	for(int i=0;i<8;i++) if (bitRead(intf,i)) return i;
-
-	// try port B
-	intf=readRegister(MCP23017_INTFB);
-	for(int i=0;i<8;i++) if (bitRead(intf,i)) return i+8;
-
-	return MCP23017_INT_ERR;
-
-}
-uint8_t Adafruit_MCP23017::getLastInterruptPinValue(){
-	uint8_t intPin=getLastInterruptPin();
-	if(intPin!=MCP23017_INT_ERR){
-		uint8_t intcapreg=regForPin(intPin,MCP23017_INTCAPA,MCP23017_INTCAPB);
-		uint8_t bit=bitForPin(intPin);
-		return (readRegister(intcapreg)>>bit) & (0x01);
-	}
-
-	return MCP23017_INT_ERR;
-}
+//uint8_t Adafruit_MCP23017::getLastInterruptPin(){
+//	uint8_t intf;
+//
+//	// try port A
+//	intf=readRegister(MCP23017_INTFA);
+//	for(int i=0;i<8;i++) if (bitRead(intf,i)) return i;
+//
+//	// try port B
+//	intf=readRegister(MCP23017_INTFB);
+//	for(int i=0;i<8;i++) if (bitRead(intf,i)) return i+8;
+//
+//	return MCP23017_INT_ERR;
+//
+//}
+//uint8_t Adafruit_MCP23017::getLastInterruptPinValue(){
+//	uint8_t intPin=getLastInterruptPin();
+//	if(intPin!=MCP23017_INT_ERR){
+//		uint8_t intcapreg=regForPin(intPin,MCP23017_INTCAPA,MCP23017_INTCAPB);
+//		uint8_t bit=bitForPin(intPin);
+//		return (readRegister(intcapreg)>>bit) & (0x01);
+//	}
+//
+//	return MCP23017_INT_ERR;
+//}
 
 
