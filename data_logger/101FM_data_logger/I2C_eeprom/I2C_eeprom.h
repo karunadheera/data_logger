@@ -26,7 +26,7 @@
 // I2C_EEPROM_PAGESIZE must be multiple of 2 e.g. 16, 32 or 64
 // 24LC256 -> 64 bytes
 #ifndef I2C_EEPROM_PAGESIZE
-	#define I2C_EEPROM_PAGESIZE 64
+	#define I2C_EEPROM_PAGESIZE 128
 #endif
 
 // TWI buffer needs max 2 bytes for address
@@ -34,6 +34,9 @@
 
 // to break blocking read/write
 #define I2C_EEPROM_TIMEOUT  1000
+
+
+#define I2C_WRITEDELAY  6000
 
 // comment next line to keep lib small
 //#define I2C_EEPROM_EXTENDED
@@ -56,7 +59,7 @@ public:
 
 private:
     uint8_t _deviceAddress;
-    uint32_t _lastWrite;  // for waitEEReady
+    volatile uint32_t _lastWrite;  // for waitEEReady
 
     int _pageBlock(uint16_t address, uint8_t* buffer, uint16_t length, bool incrBuffer);
     int _WriteBlock(uint16_t address, uint8_t* buffer, uint8_t length);

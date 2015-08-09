@@ -30,14 +30,14 @@
 // data header is stored from 0xffff to 0x1000. This is also written into a full page (128 bytes) and the rest is kept blank.
 #define EEPROM_DEV_DATA 0x51	// eeprom with this I²C address stores log data. Each log entry has 64 bytes of storage. Each page will contain two log entries.
 
-#define INTPIN0 (1 << PD2) // interrupt pin connected to MCP23017 at 0x50
-#define INTPIN1 (1 << PD3) // interrupt pin connected to MCP23017 at 0x51
+#define INTPIN0 (1 << PD2) // interrupt pin connected to MCP23017 at 0x20
+#define INTPIN1 (1 << PD3) // interrupt pin connected to MCP23017 at 0x21
 
 volatile uint8_t portdhistory = 0xff; // This is where the history of the interrupt pins is kept so that we can detect a change
 
-#define SYSLED (1 << PD4) // This LED is for showing the device health. It should blink ~50ms in each ~1600ms on normal operation. It will also show activity on EEPROMs when used.
-#define SYSLEDEXT (1 << PD5) // This LED functions along with SYSLED without any difference and is intended to be used outside the unit.
-#define NETLED (1 << PD6) // This one is for indicating network activity.
+#define EEPLED (1 << PD4)  // this is an on-board LED. It will also show any activity on EEPROM
+#define SYSLED (1 << PD5) // this LED is for showing the device health. It should blink ~50ms in each ~1600ms on normal operation. it is mounted on the front wall in 1U rack
+#define NETLED (1 << PD6) // this LED serves as an indicator for network activity
 
 volatile uint32_t beatsysint = 1; // counter for heartbeat LED
 
@@ -63,7 +63,7 @@ const char txt_body_busy[] PROGMEM = "busy"; // TCP body to be used as the respo
 const char txt_body_time_updated[] PROGMEM = "time updated\n";
 const char txt_body_interrupted[] PROGMEM = "\ninterrupted!\n";
 
-// References to MCP23017 IOExpander chips. There are two of them configured with addresses 0x00 and 0x01 via their hardware address pins.
+// References to MCP23017 IOExpander chips. There are two of them configured with addresses 0x20 and 0x21 via their hardware address pins.
 Adafruit_MCP23017 mcp0, mcp1;
 
 volatile boolean awakenByInterrupt0 = false, awakenByInterrupt1 = false; // Flags those get set when there is an interrupt on corresponding MCP23017 chips.
@@ -84,15 +84,17 @@ uint8_t dh_block[9];
  */
 void setup() {
 
-    DDRD |= SYSLED | SYSLEDEXT | NETLED; // configure  SYSLED, SYSLEDEXT and NETLED as outputs
+    DDRD |= EEPLED | SYSLED | NETLED; // configure  EEPLED, SYSLED and NETLED as outputs
+//    DDRD &= ~INTPIN0; // configure INTPIN0 as input
     DDRD &= ~INTPIN0 & ~INTPIN1; // configure INTPIN0 and INTPIN1 as inputs
+//    PORTD |= INTPIN0; // turn on the pull ups on INTPIN0
     PORTD |= INTPIN0 | INTPIN1; // turn on the pull ups on INTPIN0 and INTPIN1
 
     toggleNET();	// toggles NETLED (will turn on)
-    toggleSYS();	// toggles SYSLED and SYSLEDEXT (will turn on)
+    toggleSYS();	// toggles SYSLED and SYSLED (will turn on)
     _delay_ms(1000);	// enough time so that we can test if LEDs are fine
     toggleNET();	// toggles NETLED (will turn off)
-    toggleSYS();	// toggles SYSLED and SYSLEDEXT (will turn off)
+    toggleSYS();	// toggles SYSLED and SYSLED (will turn off)
 
     Timer1.initialize(50000);	// timer1 runs every 50ms - value is in μS
     Timer1.attachInterrupt(toggleSYS);	// attaches the timer1 to beatSys function. This causes the beatSys function to be called every 50ms
@@ -132,11 +134,11 @@ void setup() {
     Serial.println(dh->t);
 
     Timer1.detachInterrupt();	// detach timer1 from previous function
-    PORTD &= ~SYSLED & ~SYSLEDEXT; // turn off SYSLED and SYSLEDEXT as they may be ON by now
+    PORTD &= ~SYSLED; // turn off SYSLED and SYSLEDEXT as they may be ON by now
     Timer1.initialize(50000); 	// initialize timer1 to 50ms
     Timer1.attachInterrupt(toggleNET); 	// attach timer1 to toggle NETLED since below we are going to initialize network adapter
 
-    if (!ether.begin(sizeof Ethernet::buffer, mymac, 9)) { // We have connected the chip select on digital 9. This will result in zero upon failure of network adaptor based on EN28J60
+    if (!ether.begin(sizeof Ethernet::buffer, mymac, 10)) { // We have connected the chip select on digital 9. This will result in zero upon failure of network adaptor based on EN28J60
         Serial.println("Ethernet failed!"); // send error through terminal and keep beating the NETLED
     } else {
         ether.staticSetup(myip, gwip);
@@ -224,7 +226,6 @@ void loop() {
         // WOW! we have got some data.. Let's go ahead and check them out...
 //		digitalWrite(NETLED, HIGH);
         PORTD |= NETLED;
-        PORTD |= SYSLED;
         char* data = (char *) Ethernet::buffer + pos;
         if (strncmp("GET / ", data, 6) == 0) {
             responseLog(data);
@@ -406,7 +407,6 @@ void loop() {
             TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V); // Send final packet with FIN which ends the TCP transmission.
         }
         PORTD &= ~NETLED;
-        PORTD &= ~SYSLED;
     }
 }
 void responseLog(char *data) {
@@ -460,10 +460,10 @@ void responseChannels() {
 }
 
 /**
- * Toggles SYSLED and SYSLEDEXT
+ * Toggles SYSLED
  */
 void toggleSYS() {
-    PORTD ^= SYSLED | SYSLEDEXT;
+    PORTD ^= SYSLED;
 }
 
 /**
@@ -478,10 +478,10 @@ void toggleNET() {
  */
 void beatSYS() {
     if (!beatsysint) {
-        PORTD |= SYSLED | SYSLEDEXT;
+        PORTD |= SYSLED;
         beatsysint = 1;
     } else if (beatsysint == 0x2) {
-        PORTD &= ~SYSLED & ~SYSLEDEXT;
+        PORTD &= ~SYSLED;
     }
     beatsysint <<= 1;
 }
@@ -534,7 +534,8 @@ void write_data_header() {
  */
 
 uint8_t record_data_page_write_mode(char* data) {
-    PORTD |= SYSLED | SYSLEDEXT;	// turn on SYSLED to show eeprom usage
+
+    PORTD |= EEPLED;	// turn on EEPLED to show eeprom usage
     read_data_header();
     if (ee_d.writeBlock(dh->a, (uint8_t*) data, 0x40)) {
         Serial.println("error writing data to ee_d!");
@@ -545,7 +546,7 @@ uint8_t record_data_page_write_mode(char* data) {
         }
         write_data_header();
     }
-    PORTD &= ~SYSLED & ~SYSLEDEXT;	// turn off SYSLED
+    PORTD &= ~EEPLED;	// turn off EEPLED
     return 1;
 }
 
@@ -567,44 +568,46 @@ void handleInterrupt(Adafruit_MCP23017 *mcp, volatile boolean *awakenByInterrupt
 // Get more information from the MCP from the INT
     uint8_t pin = mcp->getLastInterruptPin();
     uint8_t val = mcp->getLastInterruptPinValue();
+    mcp->digitalRead(pin); // clear the interrupt condition on MCP. To speed up logging you can move this right after the line that reads uint8_t val = mcp->getLastInterruptPinValue();
 
     uint16_t addr = (0x0080 * ((uint16_t) pin)) + (mcp->getAddr() ? 0x0800 : 0);
     ee_h.readBlock(addr, (uint8_t*) buf_prog, 40);
 
     sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val ? "ON" : "OFF");
 
+    Serial.println(buf);
     record_data_page_write_mode(buf); // Write to eeprom
 
-    uint8_t val0 = mcp->digitalRead(pin); // clear the interrupt condition on MCP. To speed up logging you can move this right after the line that reads uint8_t val = mcp->getLastInterruptPinValue();
-
-    if (val0 != 0xff && val0 != val) { // lets check whether the pin has changed.
-        DS3231_get(&t); // update the time again. it might have just taken few milliseconds yet there can be a time change in seconds.
-
-        sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val0 ? "ON" : "OFF");
-
-        record_data_page_write_mode(buf); // Write to eeprom
-
-        mcp->digitalRead(pin); // clear the interrupt condition on MCP. To speed up logging you can move this right after the line that reads val = mcp->getLastInterruptPinValue();
-    }
-
-// check again if there are any interrupts pending for the same MCP chip.
-    while ((pin = mcp->getLastInterruptPin()) != 0xff) {
-
-        DS3231_get(&t); //update the time
-
-        // there seems a valid incoming interrupt pending
-        val = mcp->getLastInterruptPinValue();
-
-        addr = (0x0080 * ((uint16_t) pin)) + (mcp->getAddr() ? 0x0800 : 0);
-        ee_h.readBlock(addr, (uint8_t*) buf_prog, 40);
-
-        sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val ? "ON" : "OFF");
-
-        record_data_page_write_mode(buf); // Write to eeprom
-
-        mcp->digitalRead(pin); // clear the interrupt condition on MCP. To speed up logging you can move this right after the line that reads val = mcp->getLastInterruptPinValue();
-    }
+//
+//    if (val0 != 0xff && val0 != val) { // lets check whether the pin has changed.
+//        DS3231_get(&t); // update the time again. it might have just taken few milliseconds yet there can be a time change in seconds.
+//
+//        sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val0 ? "ON" : "OFF");
+//
+//        record_data_page_write_mode(buf); // Write to eeprom
+//
+//        mcp->digitalRead(pin); // clear the interrupt condition on MCP. To speed up logging you can move this right after the line that reads val = mcp->getLastInterruptPinValue();
+//    }
+//
+//// check again if there are any interrupts pending for the same MCP chip.
+//    while ((pin = mcp->getLastInterruptPin()) != 0xff) {
+//
+//        DS3231_get(&t); //update the time
+//
+//        // there seems a valid incoming interrupt pending
+//        val = mcp->getLastInterruptPinValue();
+//
+//        addr = (0x0080 * ((uint16_t) pin)) + (mcp->getAddr() ? 0x0800 : 0);
+//        ee_h.readBlock(addr, (uint8_t*) buf_prog, 40);
+//
+//        sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val ? "ON" : "OFF");
+//
+//        record_data_page_write_mode(buf); // Write to eeprom
+//
+//        mcp->digitalRead(pin); // clear the interrupt condition on MCP. To speed up logging you can move this right after the line that reads val = mcp->getLastInterruptPinValue();
+//    }
     *awakenByInterrupt = false;
+    mcp->readGPIOAB(); // make sure any pending interrupts are cleared so that MCP23017 is ready for next interrupt. must be merged with the master branch.
 }
 
 ISR(PCINT2_vect) {
@@ -616,6 +619,7 @@ ISR(PCINT2_vect) {
             // rising edge
         } else {
             // falling edge
+            Serial.println("INT0 falling edge");
             awakenByInterrupt0 = true;
         }
     }
@@ -625,6 +629,7 @@ ISR(PCINT2_vect) {
             // rising edge
         } else {
             // falling edge]
+            Serial.println("INT1 falling edge");
             awakenByInterrupt1 = true;
         }
     }
