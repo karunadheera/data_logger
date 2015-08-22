@@ -56,7 +56,7 @@ CFLAGS += $(CSTANDARD)
 
 # Tune the lines below only if you know what you are doing:
 
-AVRDUDE = avrdude $(PROGRAMMER) -p $(DEVICE)
+AVRDUDE = avrdude -B 1 $(PROGRAMMER) -p $(DEVICE)
 COMPILE = avr-gcc $(CFLAGS) -Wall -Os -DF_CPU=$(CLOCK) -mmcu=$(DEVICE)
 
 
@@ -65,3 +65,6 @@ flash:
 
 fuse:
 	$(AVRDUDE) $(FUSES)
+
+dump:
+	$(AVRDUDE) -F -U flash:r:./Backups/101FM_data_logger_$(shell date -u +'%y.%m.%d_%H:%M:%S').hex:i

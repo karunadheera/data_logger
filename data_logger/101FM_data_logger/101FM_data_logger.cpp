@@ -22,7 +22,9 @@
 // Do not remove the include below
 #include "101FM_data_logger.h"
 
-volatile uint32_t beatsysint = 1; // counter for heartbeat LED
+//volatile uint32_t beatsysint = 1; // counter for heartbeat LED
+volatile uint16_t togglesysint = 1;
+volatile uint8_t pin_change_detect_flag = 0;
 
 I2C_eeprom ee_h(EEPROM_DEV_HEADER);
 I2C_eeprom ee_d(EEPROM_DEV_DATA);
@@ -84,9 +86,9 @@ void setup() {
     Timer1.initialize(50000);	// timer1 runs every 50ms - value is in μS
     Timer1.attachInterrupt(toggleSYS);	// attaches the timer1 to beatSys function. This causes the beatSys function to be called every 50ms
 
-    Serial.begin(230400);	// Setup serial line baudrate (3V3 TTL)
+//    Serial.begin(230400);	// Setup serial line baudrate (3V3 TTL)
 
-    Serial.println("Setting up");	// for debugging
+//    Serial.println("Setting up");	// for debugging
 
     // START DATA HEADER SEARCH
     // We have implemented simple wear leveling on write_data_header() so that whenever a new log is written to DATA eeprom
@@ -113,10 +115,10 @@ void setup() {
 
     read_data_header();	// load the data header to the RAM
 
-    Serial.print("HDER: 0x");
-    Serial.println(dh_addr, 16);
-    Serial.print("DH_T: ");
-    Serial.println(dh->t);
+//    Serial.print("HDER: 0x");
+//    Serial.println(dh_addr, 16);
+//    Serial.print("DH_T: ");
+//    Serial.println(dh->t);
 
     Timer1.detachInterrupt();	// detach timer1 from previous function
     PORTD &= ~SYSLED; // turn off SYSLED and SYSLEDEXT as they may be ON by now
@@ -124,7 +126,7 @@ void setup() {
     Timer1.attachInterrupt(toggleNET); 	// attach timer1 to toggle NETLED since below we are going to initialize network adapter
 
     if (!ether.begin(sizeof Ethernet::buffer, mymac, EN28J60_CS)) { // this will result in zero upon failure of network adaptor based on EN28J60
-        Serial.println("Ethernet failed!"); // send error through terminal and keep beating the NETLED
+//        Serial.println("Ethernet failed!"); // send error through terminal and keep beating the NETLED
     } else {
         ether.staticSetup(myip, gwip);
 
@@ -133,7 +135,7 @@ void setup() {
         Timer1.initialize(50000);
         Timer1.attachInterrupt(toggleSYS);
 
-        Serial.println("Ethernet started");
+//        Serial.println("Ethernet started");
 
         mcp0.begin(0);	// initializes mcp0 object to refer to the MCP23017 at address 0x20. This chip handles BANK0
         mcp1.begin(1);	// 0x21. This handles BANK1
@@ -159,16 +161,16 @@ void setup() {
 
         DS3231_get(&t); // Read the time from DS3231 into struct t. This is to test if the RTC is fine.
 
-        char buf[128];
-        sprintf(buf, "Testing RTC : %04d-%02d-%02d %02d:%02d:%02d", t.year, t.mon, t.mday, t.hour, t.min, t.sec);
+//        char buf[128];
+//        sprintf(buf, "Testing RTC : %04d-%02d-%02d %02d:%02d:%02d", t.year, t.mon, t.mday, t.hour, t.min, t.sec);
 
-        Serial.println(buf);
+//        Serial.println(buf);
 
 //        PCICR |= (1 << PCIE2); // enable PCIE2 in Pin Change Interrupt Control Register (PCICR).
 //        PCMSK2 |= (1 << PCINT18) | (1 << PCINT19); // PCINT18 and PCINT19 are related to Pin Change Mask Regsiter 2 (PCMSK2). So lets enable those two.
 
         Timer1.detachInterrupt();
-        Timer1.initialize(150000);
+        Timer1.initialize(100000);
         Timer1.attachInterrupt(beatSYS);
 
         sei();
@@ -188,9 +190,11 @@ void setup() {
  */
 void loop() {
 
-    // detect changes in pins of MCP23017 at address 0x20
-    detect_pin_changes(&mcp0);
-    detect_pin_changes(&mcp1);
+    if (pin_change_detect_flag) {
+        detect_pin_changes(&mcp0);
+        detect_pin_changes(&mcp1);
+        pin_change_detect_flag = 0;
+    }
 
     // recieve data from Ethernet card
     word pos = ether.packetLoop(ether.packetReceive());
@@ -351,9 +355,43 @@ void loop() {
                 ee_h.writeBlock(0x0080 * (uint16_t) x, (uint8_t*) writebuff, 40);
             }
 
-            responseChannels();
+            ether.httpServerReplyAck();
+            memcpy_P(ether.tcpOffset(), txt_header_200, sizeof txt_header_200);
+            ether.httpServerReply_with_flags(sizeof txt_header_200 - 1, TCP_FLAGS_ACK_V);
+            char tmpbuff[47];
+            for (uint8_t x = 0; x < 0x20; x++) {
+                ee_h.readBlock(0x0080 * (uint16_t) x, (uint8_t*) writebuff, 40);
+                sprintf(tmpbuff, "b%xc%x %40s", x / 0x10, x % 0x10, writebuff);
+                tmpbuff[45] = 0x0a;
+                memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
+                ether.httpServerReply_with_flags(sizeof tmpbuff - 1, x == 0x1f ? TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V : TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission.
+            }
         } else if (strncmp("GET /cnl ", data, 9) == 0) { // response names of all channels
-            responseChannels();
+            ether.httpServerReplyAck();
+            memcpy_P(ether.tcpOffset(), txt_header_200, sizeof txt_header_200);
+            ether.httpServerReply_with_flags(sizeof txt_header_200 - 1, TCP_FLAGS_ACK_V);
+            char writebuff[41];
+            char tmpbuff[47];
+            for (uint8_t x = 0; x < 0x20; x++) {
+                ee_h.readBlock(0x0080 * (uint16_t) x, (uint8_t*) writebuff, 40);
+                sprintf(tmpbuff, "b%xc%x %40s", x / 0x10, x % 0x10, writebuff);
+                tmpbuff[45] = 0x0a;
+                memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
+                ether.httpServerReply_with_flags(sizeof tmpbuff - 1, x == 0x1f ? TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V : TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission.
+            }
+        } else if (strncmp("GET /read ", data, 10) == 0) { // response names of all channels
+            ether.httpServerReplyAck();
+            memcpy_P(ether.tcpOffset(), txt_header_200, sizeof txt_header_200);
+            ether.httpServerReply_with_flags(sizeof txt_header_200 - 1, TCP_FLAGS_ACK_V);
+            char tmpbuff[18];
+            sprintf(tmpbuff, INTTOBINARYPATTERN, INTTOBINARY(mcp0.readGPIOAB()));
+            tmpbuff[16] = 0x0a;
+            memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
+            ether.httpServerReply_with_flags(sizeof tmpbuff - 1, TCP_FLAGS_ACK_V);
+            sprintf(tmpbuff, INTTOBINARYPATTERN, INTTOBINARY(mcp1.readGPIOAB()));
+            tmpbuff[16] = 0x0a;
+            memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
+            ether.httpServerReply_with_flags(sizeof tmpbuff - 1, TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V);
         } else { // Page not found. Yes 404.
             ether.httpServerReplyAck(); // send ack to the request
             memcpy_P(ether.tcpOffset(), txt_header_404, sizeof txt_header_404);
@@ -392,20 +430,6 @@ void responseLog(char *data) {
         ether.httpServerReply_with_flags(7, TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V); // Send final packet with FIN which ends the TCP transmission.
     }
 }
-void responseChannels() {
-    ether.httpServerReplyAck();
-    memcpy_P(ether.tcpOffset(), txt_header_200, sizeof txt_header_200);
-    ether.httpServerReply_with_flags(sizeof txt_header_200 - 1, TCP_FLAGS_ACK_V);
-    char writebuff[41];
-    char tmpbuff[47];
-    for (uint8_t x = 0; x < 0x20; x++) {
-        ee_h.readBlock(0x0080 * (uint16_t) x, (uint8_t*) writebuff, 40);
-        sprintf(tmpbuff, "b%xc%x %40s", x / 0x10, x % 0x10, writebuff);
-        tmpbuff[45] = 0x0a;
-        memcpy(ether.tcpOffset(), tmpbuff, sizeof tmpbuff);
-        ether.httpServerReply_with_flags(sizeof tmpbuff - 1, x == 0x1f ? TCP_FLAGS_ACK_V | TCP_FLAGS_FIN_V : TCP_FLAGS_ACK_V); // Send final packet with FIN which ends the TCP transmission.
-    }
-}
 
 /**
  * Toggles SYSLED
@@ -422,16 +446,23 @@ void toggleNET() {
 }
 
 /**
- * When system functions normally the SYSLED fires up ~50ms every ~1600ms
+ * When system functions normally the SYSLED fires up
+ * Detects pin changes twice as much as SYSLED firing
  */
 void beatSYS() {
-    if (!beatsysint) {
+    // detect changes in pins of MCP23017 at address 0x20
+    pin_change_detect_flag = 1;
+    if (!togglesysint) {
         PORTD |= SYSLED;
-        beatsysint = 1;
-    } else if (beatsysint == 0x2) {
+        togglesysint = 1;
+    } else if (togglesysint == 0b00000010) {
+        PORTD &= ~SYSLED;
+    } else if (togglesysint == 0b00000100){
+        PORTD |= SYSLED;
+    } else if (togglesysint == 0b00001000){
         PORTD &= ~SYSLED;
     }
-    beatsysint <<= 1;
+    togglesysint <<= 1;
 }
 
 /**
@@ -468,7 +499,7 @@ void write_data_header() {
         dh_addr = 0xff80;
     }
     if (ee_h.writeBlock(dh_addr, (uint8_t*) dh_block, 8)) {
-        Serial.println("error writing data to ee_h!");
+//        Serial.println("error writing data to ee_h!");
     }
 }
 
@@ -486,7 +517,7 @@ uint8_t record_data_page_write_mode(char* data) {
     PORTD |= EEPLED;	// turn on EEPLED to show eeprom usage
     read_data_header();
     if (ee_d.writeBlock(dh->a, (uint8_t*) data, 0x40)) {
-        Serial.println("error writing data to ee_d!");
+//        Serial.println("error writing data to ee_d!");
     } else {
         dh->a += 0x0040;
         if (dh->a == dh->b) {
@@ -498,7 +529,6 @@ uint8_t record_data_page_write_mode(char* data) {
     return 1;
 }
 
-
 /**
  * Let's try to detect pin changes by comparing the current GPIOAB values with the ones in the history using XOR
  * When there is a pin change those bits should appear as 1
@@ -506,25 +536,24 @@ uint8_t record_data_page_write_mode(char* data) {
 void detect_pin_changes(Adafruit_MCP23017 *mcp) {
     // detect changes in pins of MCP23017
     uint16_t changedBits = (mcp->getAddr() ? mcp1_bits : mcp0_bits) ^ mcp->readGPIOAB();
+    (mcp->getAddr() ? mcp1_bits : mcp0_bits) = mcp->readGPIOAB();
     if (changedBits) {
-        Serial.print("a pin-change detected at MCP23017 at addr:");
-        Serial.println(mcp->getAddr(), DEC);
-        Serial.print("changed bits are:");
-        Serial.println(changedBits, BIN);
+//        Serial.print("a pin-change detected at MCP23017 at addr:");
+//        Serial.println(mcp->getAddr(), DEC);
+//        Serial.print("changed bits are:");
+//        Serial.println(changedBits, BIN);
         for (uint8_t pin = 0; pin < 16; pin++) { // go thorugh all 16 pins
             uint8_t bit = (changedBits >> pin) & 0b1; // grab the required bit out of the GPIOAB values
             if (bit) { // check if this bit is not zero
                 DS3231_get(&t); // receive time from RTC
-                uint8_t val = mcp->digitalRead(pin);
+                uint8_t val = ((mcp->getAddr() ? mcp1_bits : mcp0_bits) >> pin) & 0b1;
                 uint16_t addr = (0x0080 * ((uint16_t) pin)) + (mcp->getAddr() ? 0x0800 : 0);
                 ee_h.readBlock(addr, (uint8_t*) buf_prog, 40);
                 sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val ? "ON" : "OFF");
-                Serial.println(buf);
+//                Serial.println(buf);
                 record_data_page_write_mode(buf); // Write to eeprom
             }
         }
-        (mcp->getAddr() ? mcp1_bits : mcp0_bits) = mcp->readGPIOAB();
     }
 }
-
 

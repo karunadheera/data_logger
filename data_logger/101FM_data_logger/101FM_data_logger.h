@@ -27,7 +27,6 @@
  */
 #define EN28J60_CS 10
 
-
 #define TCP_BUFF_MAX 160 // TCP buffer size reduced to save AVR SRAM for other uses
 
 #define TCP_FLAGS_FIN_V 1 //as declared in net.h
@@ -41,11 +40,28 @@
 #define INTPIN0 (1 << PD2) // interrupt pin connected to MCP23017 at 0x20
 #define INTPIN1 (1 << PD3) // interrupt pin connected to MCP23017 at 0x21
 
-
 #define EEPLED (1 << PD4)  // this is an on-board LED. It will also show any activity on EEPROM
 #define SYSLED (1 << PD5) // this LED is for showing the device health. It should blink ~50ms in each ~1600ms on normal operation. it is mounted on the front wall in 1U rack
 #define NETLED (1 << PD6) // this LED serves as an indicator for network activity
 
+#define INTTOBINARYPATTERN "%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d"
+#define INTTOBINARY(_int)  \
+  (_int & 0x8000 ? 1 : 0), \
+  (_int & 0x4000 ? 1 : 0), \
+  (_int & 0x2000 ? 1 : 0), \
+  (_int & 0x1000 ? 1 : 0), \
+  (_int & 0x0800 ? 1 : 0), \
+  (_int & 0x0400 ? 1 : 0), \
+  (_int & 0x0200 ? 1 : 0), \
+  (_int & 0x0100 ? 1 : 0), \
+  (_int & 0x0080 ? 1 : 0), \
+  (_int & 0x0040 ? 1 : 0), \
+  (_int & 0x0020 ? 1 : 0), \
+  (_int & 0x0010 ? 1 : 0), \
+  (_int & 0x0008 ? 1 : 0), \
+  (_int & 0x0004 ? 1 : 0), \
+  (_int & 0x0002 ? 1 : 0), \
+  (_int & 0x0001 ? 1 : 0)
 
 //end of add your includes here
 #ifdef __cplusplus
@@ -60,14 +76,14 @@ void setup();
 //add your function definitions for the project 101FM_data_logger here
 
 struct DataHeader {
-	uint16_t a; // address location of latest block of log
-	uint16_t b; // address location of earliest block of log
-	uint32_t t; // inverse of unix time when the latest block of log is written. there is a good reasone
-				// that we use the inverse of unixtime. 24LC512 (and may be many other chips) comes all their
-				// data bytes written as 0xff. Therefore we should pick a value that is being decremented over time.
+    uint16_t a; // address location of latest block of log
+    uint16_t b; // address location of earliest block of log
+    uint32_t t; // inverse of unix time when the latest block of log is written. there is a good reasone
+                // that we use the inverse of unixtime. 24LC512 (and may be many other chips) comes all their
+                // data bytes written as 0xff. Therefore we should pick a value that is being decremented over time.
 };
 void responseLog(char *data);
-void responseChannels();
+//void responseChannels();
 void toggleSYS();
 void toggleNET();
 void beatSYS();
