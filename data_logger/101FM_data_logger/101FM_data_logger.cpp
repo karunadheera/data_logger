@@ -51,8 +51,34 @@ const char txt_body_interrupted[] PROGMEM = "\ninterrupted!\n";
 // References to MCP23017 IOExpander chips. There are two of them configured with addresses 0x20 and 0x21 via their hardware address pins.
 Adafruit_MCP23017 mcp0, mcp1;
 
-volatile uint16_t mcp0_bits = 0b1111111111111111; // all the pins are pulled high
-volatile uint16_t mcp1_bits = 0b1111111111111111; // ''
+/**
+ * We will make sure that any pin is absolutely settled down before deciding on the pin value.
+ * Above is achieved using two sets of history bits per each MCP23017 chip.
+ * mcp00_bits and mcp10_bits are the former sets of history bits
+ */
+volatile uint16_t mcp00_bits = 0b1111111111111111; // all the pins are pulled high
+volatile uint16_t mcp10_bits = 0b1111111111111111; // ''
+
+/**
+ * We use below bits to hold settled pin values so that we do not record the same ON/OFF condition when there is no absolute change
+ */
+volatile uint16_t mcp0_settled_bits = 0b1111111111111111; // confirmed settled pin values
+
+/**
+ * below are the most recent history bits
+ */
+volatile uint16_t mcp01_bits = 0b1111111111111111; // all the pins are pulled high
+volatile uint16_t mcp11_bits = 0b1111111111111111; // ''
+
+/**
+ * We use below bits to hold settled pin values so that we do not record the same ON/OFF condition when there is no absolute change
+ */
+volatile uint16_t mcp1_settled_bits = 0b1111111111111111; // confirmed settled pin values
+
+
+/**
+ * Interrupts are no longer used.
+ */
 //volatile boolean awakenByInterrupt0 = false, awakenByInterrupt1 = false; // Flags those get set when there is an interrupt on corresponding MCP23017 chips.
 
 char buf_prog[41]; // Temporary buffer to be used to store words read from Flash (PROGMEM).
@@ -86,7 +112,7 @@ void setup() {
     Timer1.initialize(50000);	// timer1 runs every 50ms - value is in μS
     Timer1.attachInterrupt(toggleSYS);	// attaches the timer1 to beatSys function. This causes the beatSys function to be called every 50ms
 
-//    Serial.begin(230400);	// Setup serial line baudrate (3V3 TTL)
+    Serial.begin(230400);	// Setup serial line baudrate (3V3 TTL)
 
 //    Serial.println("Setting up");	// for debugging
 
@@ -457,9 +483,9 @@ void beatSYS() {
         togglesysint = 1;
     } else if (togglesysint == 0b00000010) {
         PORTD &= ~SYSLED;
-    } else if (togglesysint == 0b00000100){
+    } else if (togglesysint == 0b00000100) {
         PORTD |= SYSLED;
-    } else if (togglesysint == 0b00001000){
+    } else if (togglesysint == 0b00001000) {
         PORTD &= ~SYSLED;
     }
     togglesysint <<= 1;
@@ -535,8 +561,9 @@ uint8_t record_data_page_write_mode(char* data) {
  */
 void detect_pin_changes(Adafruit_MCP23017 *mcp) {
     // detect changes in pins of MCP23017
-    uint16_t changedBits = (mcp->getAddr() ? mcp1_bits : mcp0_bits) ^ mcp->readGPIOAB();
-    (mcp->getAddr() ? mcp1_bits : mcp0_bits) = mcp->readGPIOAB();
+    uint16_t changedBits = (mcp->getAddr() ? mcp10_bits : mcp00_bits) ^ mcp->readGPIOAB();
+    (mcp->getAddr() ? mcp10_bits : mcp00_bits) = (mcp->getAddr() ? mcp11_bits : mcp01_bits);
+    (mcp->getAddr() ? mcp11_bits : mcp01_bits) = mcp->readGPIOAB();
     if (changedBits) {
 //        Serial.print("a pin-change detected at MCP23017 at addr:");
 //        Serial.println(mcp->getAddr(), DEC);
@@ -545,13 +572,26 @@ void detect_pin_changes(Adafruit_MCP23017 *mcp) {
         for (uint8_t pin = 0; pin < 16; pin++) { // go thorugh all 16 pins
             uint8_t bit = (changedBits >> pin) & 0b1; // grab the required bit out of the GPIOAB values
             if (bit) { // check if this bit is not zero
-                DS3231_get(&t); // receive time from RTC
-                uint8_t val = ((mcp->getAddr() ? mcp1_bits : mcp0_bits) >> pin) & 0b1;
-                uint16_t addr = (0x0080 * ((uint16_t) pin)) + (mcp->getAddr() ? 0x0800 : 0);
-                ee_h.readBlock(addr, (uint8_t*) buf_prog, 40);
-                sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val ? "ON" : "OFF");
-//                Serial.println(buf);
-                record_data_page_write_mode(buf); // Write to eeprom
+                uint8_t val0 = ((mcp->getAddr() ? mcp10_bits : mcp00_bits) >> pin) & 0b1;
+                if (val0 == (((mcp->getAddr() ? mcp11_bits : mcp01_bits) >> pin) & 0b1)) {
+                    if((((mcp->getAddr() ? mcp1_settled_bits : mcp0_settled_bits) >> pin) & 0b1) != val0){ // make sure there is an absolute change in pin value
+
+                        // if there is a change then set the value in settled bits.
+                        if(val0){
+                            (mcp->getAddr() ? mcp1_settled_bits : mcp0_settled_bits) |= (1 << pin); // set the pin value
+                        } else {
+                            (mcp->getAddr() ? mcp1_settled_bits : mcp0_settled_bits) &= ~(1 << pin); // clear the pin value
+                        }
+                        uint16_t addr = (0x0080 * ((uint16_t) pin)) + (mcp->getAddr() ? 0x0800 : 0);
+                        ee_h.readBlock(addr, (uint8_t*) buf_prog, 40);
+                        DS3231_get(&t); // receive time from RTC
+                        sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val0 ? "ON" : "OFF");
+                        //                Serial.println(buf);
+                        record_data_page_write_mode(buf); // Write to eeprom
+                    }
+                } else {
+                    Serial.println("pins not settled yet");
+                }
             }
         }
     }

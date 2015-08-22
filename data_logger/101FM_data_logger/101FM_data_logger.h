@@ -23,7 +23,7 @@
  * Chip select pin of EN28J60 is connected to which Arduino digital pin? Make sure this is properly configured before uploading code, otherwise ethernet won't work
  *
  * ***** The data logger installed at transmission is having Arduino pin 9 configured as CS pin *****
- * ***** All other data loggers has
+ * ***** All other data loggers uses pin 10 as CS for EN28J60
  */
 #define EN28J60_CS 10
 
@@ -37,12 +37,15 @@
 // data header is stored from 0xffff to 0x1000. This is also written into a full page (128 bytes) and the rest is kept blank.
 #define EEPROM_DEV_DATA 0x51    // eeprom with this I²C address stores log data. Each log entry has 64 bytes of storage. Each page will contain two log entries.
 
-#define INTPIN0 (1 << PD2) // interrupt pin connected to MCP23017 at 0x20
-#define INTPIN1 (1 << PD3) // interrupt pin connected to MCP23017 at 0x21
+/**
+ * Not used since we are using polling
+ */
+//#define INTPIN0 (1 << PD2) // interrupt pin connected to MCP23017 at 0x20
+//#define INTPIN1 (1 << PD3) // interrupt pin connected to MCP23017 at 0x21
 
 #define EEPLED (1 << PD4)  // this is an on-board LED. It will also show any activity on EEPROM
-#define SYSLED (1 << PD5) // this LED is for showing the device health. It should blink ~50ms in each ~1600ms on normal operation. it is mounted on the front wall in 1U rack
-#define NETLED (1 << PD6) // this LED serves as an indicator for network activity
+#define SYSLED (1 << PD5) // this LED is for showing the device health. It should blink ~50ms in each ~1600ms on normal operation. it is mounted at the front of the unit
+#define NETLED (1 << PD6) // this LED serves as an indicator for network activity, mounted at front.
 
 #define INTTOBINARYPATTERN "%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d"
 #define INTTOBINARY(_int)  \
