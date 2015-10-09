@@ -75,12 +75,10 @@ volatile uint16_t mcp11_bits = 0b1111111111111111; // ''
  */
 volatile uint16_t mcp1_settled_bits = 0b1111111111111111; // confirmed settled pin values
 
-
 /**
  * Interrupts are no longer used.
  */
 //volatile boolean awakenByInterrupt0 = false, awakenByInterrupt1 = false; // Flags those get set when there is an interrupt on corresponding MCP23017 chips.
-
 char buf_prog[41]; // Temporary buffer to be used to store words read from Flash (PROGMEM).
 char buf[65];
 
@@ -561,10 +559,11 @@ uint8_t record_data_page_write_mode(char* data) {
  */
 void detect_pin_changes(Adafruit_MCP23017 *mcp) {
     // detect changes in pins of MCP23017
-    uint16_t changedBits = (mcp->getAddr() ? mcp10_bits : mcp00_bits) ^ mcp->readGPIOAB();
-    (mcp->getAddr() ? mcp10_bits : mcp00_bits) = (mcp->getAddr() ? mcp11_bits : mcp01_bits);
-    (mcp->getAddr() ? mcp11_bits : mcp01_bits) = mcp->readGPIOAB();
-    if (changedBits) {
+    uint16_t tmpbits = mcp->readGPIOAB(); // read gpio only once
+    uint16_t changedBits = (mcp->getAddr() ? mcp10_bits : mcp00_bits) ^ tmpbits; // mcp->getAddr() tells us which MCP23017 is being used here
+    (mcp->getAddr() ? mcp10_bits : mcp00_bits) = (mcp->getAddr() ? mcp11_bits : mcp01_bits); // move recent pin history to former history
+    (mcp->getAddr() ? mcp11_bits : mcp01_bits) = tmpbits; // assign current pin values to recent history
+    if (changedBits) { // we only have to worry if there is some ping change there
 //        Serial.print("a pin-change detected at MCP23017 at addr:");
 //        Serial.println(mcp->getAddr(), DEC);
 //        Serial.print("changed bits are:");
@@ -574,10 +573,10 @@ void detect_pin_changes(Adafruit_MCP23017 *mcp) {
             if (bit) { // check if this bit is not zero
                 uint8_t val0 = ((mcp->getAddr() ? mcp10_bits : mcp00_bits) >> pin) & 0b1;
                 if (val0 == (((mcp->getAddr() ? mcp11_bits : mcp01_bits) >> pin) & 0b1)) {
-                    if((((mcp->getAddr() ? mcp1_settled_bits : mcp0_settled_bits) >> pin) & 0b1) != val0){ // make sure there is an absolute change in pin value
+                    if ((((mcp->getAddr() ? mcp1_settled_bits : mcp0_settled_bits) >> pin) & 0b1) != val0) { // make sure there is an absolute change in pin value
 
                         // if there is a change then set the value in settled bits.
-                        if(val0){
+                        if (val0) {
                             (mcp->getAddr() ? mcp1_settled_bits : mcp0_settled_bits) |= (1 << pin); // set the pin value
                         } else {
                             (mcp->getAddr() ? mcp1_settled_bits : mcp0_settled_bits) &= ~(1 << pin); // clear the pin value
@@ -586,8 +585,10 @@ void detect_pin_changes(Adafruit_MCP23017 *mcp) {
                         ee_h.readBlock(addr, (uint8_t*) buf_prog, 40);
                         DS3231_get(&t); // receive time from RTC
                         sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d %40s %3s", t.year, t.mon, t.mday, t.hour, t.min, t.sec, buf_prog, val0 ? "ON" : "OFF");
-                        //                Serial.println(buf);
                         record_data_page_write_mode(buf); // Write to eeprom
+                        Serial.println(buf);
+                    } else {
+                        Serial.println("no change in pin value");
                     }
                 } else {
                     Serial.println("pins not settled yet");
